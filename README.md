@@ -1,6 +1,7 @@
-# vame-motifs
+# motif-gui
 
 Behavioural motifs over time from DeepLabCut pose estimations, using [VAME](https://github.com/EthoML/VAME).
+The Python package and its commands are called `vame-motifs` (CLI) and `vame-motifs-gui` (window).
 
 **Input:** a folder of DeepLabCut `.csv` files (one per recording) and a short YAML file.
 **Output:** one `.csv` per recording with the motif of every frame, plus a motif-usage summary.
@@ -26,8 +27,8 @@ Python 3.12 or newer. Use a dedicated environment (not conda's `base`):
 ```bash
 conda create -n vame python=3.12
 conda activate vame
-git clone <repo-url> vame-motifs
-cd vame-motifs
+git clone <repo-url> motif-gui
+cd motif-gui
 python -m pip install .            # or: python -m pip install -e ".[dev]" to develop
 vame-motifs --help
 ```
