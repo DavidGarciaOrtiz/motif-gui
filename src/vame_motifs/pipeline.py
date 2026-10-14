@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +52,22 @@ def vame_settings(cfg: ExperimentConfig) -> dict:
         "project_random_state": cfg.seed,
         "all_data": "yes",  # segment every session, never ask interactively
     }
+
+
+def symlinks_allowed() -> bool:
+    """True if this process can create symbolic links.
+
+    Windows only allows them with Administrator rights or Developer Mode;
+    without them, videos are copied into the VAME project instead of linked.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "target"
+        target.touch()
+        try:
+            (Path(tmp) / "link").symlink_to(target)
+        except OSError:
+            return False
+    return True
 
 
 def _import_vame():
@@ -126,6 +144,7 @@ class VamePipeline:
             working_directory=str(self.cfg.output),
             videos=[str(v) for v in self.cfg.videos] or None,  # paired positionally with pose_files
             fps=self.cfg.fps,
+            copy_videos=not symlinks_allowed(),  # Windows without Developer Mode: copy, since links fail
             config_kwargs=dict(settings),  # a copy: VAME adds its own keys to this dict
         )
         # Keyword arguments only: VAME's state-saving decorator misreads positional ones.
@@ -365,7 +384,10 @@ class VamePipeline:
                 raise PipelineError(f"input.videos: {video} does not exist")
             if raw.is_symlink():
                 raw.unlink()
-            raw.symlink_to(video.resolve())
+            if symlinks_allowed():
+                raw.symlink_to(video.resolve())
+            else:
+                shutil.copy(video, raw)  # same fallback as init: a copy where links are not allowed
         return video
 
     def gif(self, session: str | None = None, algorithm: str | None = None, start: int | None = None,

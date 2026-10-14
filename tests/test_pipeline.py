@@ -3,7 +3,7 @@ import pytest
 from conftest import write_video, write_yaml
 
 from vame_motifs.config import load_config
-from vame_motifs.pipeline import PipelineError, VamePipeline
+from vame_motifs.pipeline import PipelineError, VamePipeline, symlinks_allowed
 
 
 def test_motif_videos_without_input_videos_says_so(experiment):
@@ -159,3 +159,12 @@ def test_same_recordings_or_no_project_pass(experiment):
 
     _write_project_config(pipeline, ["rat02DLC_resnet50", "rat01DLC_resnet50"])  # order does not matter
     pipeline._check_project_sessions()
+
+
+def test_symlinks_allowed_is_false_when_links_fail(monkeypatch):
+    # Windows without Developer Mode raises OSError on every symlink
+    def refuse(self, target):
+        raise OSError("symbolic links not allowed")
+
+    monkeypatch.setattr("pathlib.Path.symlink_to", refuse)
+    assert symlinks_allowed() is False
