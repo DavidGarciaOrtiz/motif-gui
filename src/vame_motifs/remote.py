@@ -183,11 +183,17 @@ def _rsync(s: RemoteSettings, source: str, dest: str) -> list[str]:
     return ["rsync", "-az", "-e", shlex.join(["ssh", *_client_options(s)]), source, dest]
 
 
+def _is_absolute(text: str) -> bool:
+    """True for an absolute path on this computer or on the (Linux) server."""
+    # On Windows "/pool01/data" has no drive, so Path calls it relative: check the POSIX form too
+    return posixpath.isabs(text) or Path(text).expanduser().is_absolute()
+
+
 def _inside(text: str) -> str | None:
     """A YAML path as a clean path relative to the experiment folder, or None if it is
     absolute (a server path) or points outside the folder."""
     text = text.strip()
-    if not text or Path(text).expanduser().is_absolute():
+    if not text or _is_absolute(text):
         return None
     rel = os.path.normpath(text)
     return None if rel == ".." or rel.startswith(".." + os.sep) else rel

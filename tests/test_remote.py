@@ -37,7 +37,10 @@ def test_connection_options_go_through_the_tunnel(experiment, server):
     steps, _ = remote_job(server, experiment, "run", [], VALUES)
     run = steps[2].args
     assert run[run.index("-p") + 1] == "2222" and run[run.index("-J") + 1] == "me@login.example.org"
-    assert f"ControlPath={remote.CONTROL_PATH}" in run
+    if remote.CONTROL_PATH:  # None on Windows, whose OpenSSH cannot share connections
+        assert f"ControlPath={remote.CONTROL_PATH}" in run
+    else:
+        assert not any(arg.startswith("ControlPath=") for arg in run)
     assert "&& srun --gres=gpu:1 ~/envs/vame/bin/python -m vame_motifs run" in run[-1]
     # rsync uses the same ssh options, so it goes through the same connection
     ssh_for_rsync = shlex.split(steps[1].args[steps[1].args.index("-e") + 1])
