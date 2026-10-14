@@ -22,6 +22,36 @@ pose .csv files ──▶ validate ──▶ prepare ──▶ train ──▶ s
 
 ## 1. Install
 
+Both ways below install `vame-py==0.14.4`, the exact VAME version the code is written
+against, into a conda environment called `vame`. VAME picks the device by itself: CUDA GPU
+if present, then Apple MPS, then CPU.
+
+### On Windows: `install.bat`
+
+1. Install [Miniconda](https://www.anaconda.com/download/success) if you don't have conda yet
+   (Anaconda or Miniforge work too).
+2. Get this repository: `git clone <repo-url> motif-gui`, or on GitHub *Code → Download ZIP*
+   and unzip it.
+3. Double-click **`install.bat`** in the `motif-gui` folder.
+
+The installer finds conda, creates the `vame` environment with Python 3.12 (only if it
+does not exist yet), installs the package into it and puts a **VAME motifs** shortcut on
+the desktop that opens the window. The first install downloads VAME and PyTorch, so it
+takes several minutes. If something fails, the console stays open with the error.
+
+| To… | Do this |
+|---|---|
+| Open the window | Double-click the **VAME motifs** desktop shortcut, or `start-gui.bat` |
+| Update after new code (`git pull` or a new ZIP) | Double-click `install.bat` again: the environment is reused |
+| Use the commands in a terminal | Open *Anaconda Prompt*, then `conda activate vame` and `vame-motifs --help` |
+| Develop (editable install + pytest, ruff) | In a terminal in `motif-gui`: `install.bat dev` |
+
+On Windows, pip installs the CPU-only build of PyTorch. That is enough for the window,
+for every step except `train`, and for training on a GPU server (see *Training on a GPU server*
+below); training on the PC itself will be slow.
+
+### On macOS, Linux or a server: by hand
+
 Python 3.12 or newer. Use a dedicated environment (not conda's `base`):
 
 ```bash
@@ -32,9 +62,6 @@ cd motif-gui
 python -m pip install .            # or: python -m pip install -e ".[dev]" to develop
 vame-motifs --help
 ```
-
-This installs `vame-py==0.14.4`, the exact VAME version the code is written against.
-VAME picks the device by itself: CUDA GPU if present, then Apple MPS, then CPU.
 
 ## 2. Prepare your data
 
@@ -115,7 +142,9 @@ command safe to use in scripts and Slurm jobs.
 ### With the window (GUI)
 
 Everything above can also be done from a window, without the terminal or editing YAML by hand.
-It is installed with the package; start it with:
+It is installed with the package. On Windows, after `install.bat`, open it with the
+**VAME motifs** desktop shortcut or `start-gui.bat` (`start-gui.bat experiment.yaml` opens
+that file). From a terminal:
 
 ```bash
 conda activate vame
@@ -316,7 +345,8 @@ that produced it.
 | `No hmm labels for '...'. Run 'segment' first.` | `export` was run before `segment`, or with a different `n_clusters`. |
 | `No raw videos configured (input.videos). ...` | `videos` was run without setting `input.videos` in the YAML. |
 | `input.videos: no video matches pose file '...'` | No video in `input.videos` has a name that is a prefix of that pose file's name (the DeepLabCut naming convention). |
-| `VAME is not installed in this environment` | Activate the right environment (`conda activate vame`). |
+| `VAME is not installed in this environment` | Activate the right environment (`conda activate vame`). On Windows, run `install.bat` again. |
+| `Error: conda was not found.` (from `install.bat`) | Install Miniconda, or Anaconda, in its default folder and run `install.bat` again. |
 
 ## 6. Code layout
 
