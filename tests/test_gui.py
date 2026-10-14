@@ -23,7 +23,7 @@ def test_missing_sections_keep_defaults():
 
 
 def test_read_bodyparts(experiment):
-    pose = sorted((experiment.parent / "pose").glob("*.csv"))[0]
+    pose = min((experiment.parent / "pose").glob("*.csv"))
     assert read_bodyparts(pose) == ["snout", "left_ear", "right_ear", "centre", "tailbase"]
 
 

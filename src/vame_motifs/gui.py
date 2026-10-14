@@ -416,7 +416,7 @@ class App(ttk.Frame):
             return
         try:
             bodyparts = read_bodyparts(files[0])
-        except Exception as e:  # any unreadable file: show it, 'validate' gives the full check
+        except Exception as e:  # noqa: BLE001  any unreadable file: show it, 'validate' gives the full check
             messagebox.showerror("Body parts", f"Cannot read {files[0].name}: {e}")
             return
         self._set_bodyparts(bodyparts, selected=self.get_values()["exclude"])
@@ -490,8 +490,8 @@ class App(ttk.Frame):
             with open(path) as fh:
                 raw = yaml.safe_load(fh) or {}
             if not isinstance(raw, dict):
-                raise ValueError("not a set of 'key: value' sections")
-        except (OSError, yaml.YAMLError, ValueError) as e:
+                raise TypeError("not a set of 'key: value' sections")
+        except (OSError, yaml.YAMLError, TypeError) as e:
             messagebox.showerror("Open", f"Cannot read {path.name}: {e}")
             return
         self.yaml_path = path.resolve()
@@ -531,9 +531,8 @@ class App(ttk.Frame):
         ``on_done(exit code)`` is called when it ends (the Explorer reloads its results)."""
         if self.running:
             return
-        if self.dirty or self.yaml_path is None:
-            if not self.save():
-                return
+        if (self.dirty or self.yaml_path is None) and not self.save():
+            return
         flags = list(extra or [])
         if self.force.get() and command in ("run", "segment"):
             flags.append("--force")
@@ -806,7 +805,7 @@ class App(ttk.Frame):
             except ImportError as e:
                 messagebox.showerror("Explore results", f"Missing package: {e}. Install VAME (section 1 of the README).")
                 return
-            except Exception as e:  # ConfigError and friends: what 'validate' would say
+            except Exception as e:  # noqa: BLE001  ConfigError and friends: what 'validate' would say
                 messagebox.showerror("Explore results", f"Cannot read the experiment: {e}")
                 return
             self.explorer = viewer.Explorer(self, cfg)
@@ -820,7 +819,7 @@ class App(ttk.Frame):
         if sys.platform == "darwin":
             subprocess.Popen(["open", str(folder)])
         elif sys.platform == "win32":
-            os.startfile(folder)  # noqa: S606  (Windows only)
+            os.startfile(folder)  # Windows only
         else:
             subprocess.Popen(["xdg-open", str(folder)])
 

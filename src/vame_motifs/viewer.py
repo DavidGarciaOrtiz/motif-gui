@@ -390,7 +390,7 @@ class Explorer(tk.Toplevel):
         if read_config:
             try:
                 self.cfg = load_config(self.cfg.yaml_path)
-            except Exception as e:  # any problem with the experiment: say so, keep the old one
+            except Exception as e:  # noqa: BLE001  any problem with the experiment: say so, keep the old one
                 messagebox.showerror("Explore results", f"Cannot read {self.cfg.yaml_path.name}: {e}", parent=self)
                 return
             self.algorithm_box.configure(values=self.cfg.algorithms)
