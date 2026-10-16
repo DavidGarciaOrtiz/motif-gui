@@ -1,3 +1,5 @@
+import pytest
+
 from vame_motifs.cli import main
 
 
@@ -27,3 +29,10 @@ def test_gif_options_are_parsed():
 def test_umap_without_segmentation_says_what_to_run(experiment, capsys):
     assert main(["umap", "-c", str(experiment)]) == 1
     assert "Run 'segment' first" in capsys.readouterr().err
+
+
+def test_train_more_requires_epochs(experiment, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["train-more", "-c", str(experiment)])
+    assert exc.value.code == 2
+    assert "--epochs" in capsys.readouterr().err

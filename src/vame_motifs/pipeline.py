@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 VAME_VERSION = "0.14.4"
 SOURCE_SOFTWARE = "DeepLabCut"
 MODEL_NAME = "VAME"  # VAME's default model_name; results are saved under it
-MODEL_SETTINGS_FILE = "model_settings.yaml" # in the project folder: the settings 'prepare' used
+MODEL_SETTINGS_FILE = "model_settings.yaml"  # in the project folder: the settings 'prepare' used
 
 
 class PipelineError(RuntimeError):
@@ -57,17 +57,17 @@ def vame_settings(cfg: ExperimentConfig) -> dict:
 
 def model_settings(cfg: ExperimentConfig) -> dict:
     """The YAML settings that shape the training set and the model.
-    
-    Changing any of them after 'prepare' leaves the existing model out of date. 
+
+    Changing any of them after 'prepare' leaves the existing model out of date.
     n_clusters and method are not here: they only affect segmentation, which is redone
     for new values without retraining. fps is not here either as VAME's preprocessing
     and training never read it.
     """
-    return{
+    return {
         "min_confidence": cfg.min_confidence,
         "align_center": cfg.align_center,
         "align_direction": cfg.align_direction,
-        "exclude": sorted(cfg.exclude), # order of the list does not change data
+        "exclude": sorted(cfg.exclude),  # order of the list does not change data
         "time_window": cfg.time_window,
         "zdims": cfg.zdims,
         "max_epochs": cfg.max_epochs,
@@ -151,8 +151,8 @@ class VamePipeline:
         config_kwargs, so the settings are written again with update_config.
         That makes YAML edits (e.g. a new n_clusters) take effect on re-runs.
         For the same reason, an existing project never gets new recordings:
-        _check_project_sessions stops early if the recordings changed. 
-        _check_settings=False skips _check_model_settings: for 'prepare' and 
+        _check_project_sessions stops early if the recordings changed.
+        check_settings=False skips _check_model_settings: for 'prepare' and
         'run --force', which make the training set again with the new settings.
         """
         self._check_project_sessions()
@@ -208,15 +208,15 @@ class VamePipeline:
     @property
     def model_settings_path(self) -> Path:
         return self.project_path / MODEL_SETTINGS_FILE
-    
+
     def _check_model_settings(self) -> None:
-        """Raise if the training set (and so the model) was made with other settings than the YAML's
-        
+        """Raise if the training set (and so the model) was made with other settings than the YAML's.
+
         Without this, 'run' would skip prepare and train (their files exist)
         and label the old model's results with the new settings.
         """
         if not self.model_settings_path.exists():
-            return # nothing prepared yet (or a project made before this check existed)
+            return  # nothing prepared yet (or a project made before this check existed)
         import yaml
 
         with open(self.model_settings_path) as fh:
@@ -225,7 +225,7 @@ class VamePipeline:
         changes = [f"{key}: {used.get(key)} -> {value}" for key, value in now.items() if used.get(key) != value]
         if changes:
             raise PipelineError(
-                f"The training set in {self.project_path} was made with other settings ({';'.join(changes)}). "
+                f"The training set in {self.project_path} was made with other settings ({'; '.join(changes)}). "
                 "To use the new ones, prepare and train again ('run --force', or 'prepare' then 'train'); "
                 "to keep the old results, set a new output folder."
             )
@@ -233,7 +233,7 @@ class VamePipeline:
     def _write_model_settings(self) -> None:
         import yaml
         with open(self.model_settings_path, "w") as fh:
-            yaml.safe_dump(model_settings(self.cfg), fh, sort_keys=False) 
+            yaml.safe_dump(model_settings(self.cfg), fh, sort_keys=False)
 
     @property
     def config(self) -> dict:
@@ -242,7 +242,7 @@ class VamePipeline:
     # --- step 2-3 -------------------------------------------------------
     def prepare(self) -> None:
         if self._config is None:
-            self.init(check_settings=False) # prepare is how new settings get applied
+            self.init(check_settings=False)  # prepare is how new settings get applied
         vame = _import_vame()
         processed_variable = vame.preprocessing(
             config=self.config,
@@ -270,6 +270,86 @@ class VamePipeline:
                 f"Increase advanced.max_epochs (now {self.cfg.max_epochs}) or see {self._log('train_model')}"
             )
         vame.evaluate_model(config=self.config)  # loss plots in model/evaluate/
+
+    # --- step 5b: more epochs for an underfit model ---------------------
+    @property
+    def history_dir(self) -> Path:
+        return self.project_path / "history"
+
+    def train_more(self, epochs: int) -> Path:
+        """Train the existing model for ``epochs`` more epochs, starting from its weights.
+
+        For a model that was still improving when training stopped (underfit).
+        The previous round is moved to history/round_<k>/ first (_archive_round),
+        so nothing is lost and nothing left in place belongs to the old model.
+        VAME's config.yaml is not changed: the pretrained settings go to this
+        call only. Returns the folder of the previous round.
+        """
+        if epochs < 1:
+            raise PipelineError(f"--epochs must be at least 1 (got {epochs})")
+        if not self.model_path.exists():
+            raise PipelineError("No trained model yet. Run 'train' first.")
+        config = self.config  # opens the project: refuses if the settings changed since 'prepare'
+        vame = _import_vame()
+        round_dir = self._archive_round()
+
+        log = self._log("train_model")
+        log_start = log.stat().st_size if log.exists() else 0  # VAME appends to its log
+        model_time = self.model_path.stat().st_mtime_ns
+        vame.train_model(config={**config, "pretrained_weights": True, "pretrained_model": MODEL_NAME,
+                                 "max_epochs": epochs})
+        new_log = log.read_bytes()[log_start:].decode(errors="replace") if log.exists() else ""
+        if "Could not load pretrained model" in new_log:
+            # VAME only logs this and goes on training from random weights
+            raise PipelineError(f"VAME could not load the previous weights, so this was not a continuation. "
+                                f"The previous model is in {round_dir}. See {log}")
+        if self.model_path.stat().st_mtime_ns == model_time:
+            raise PipelineError(f"Training finished without saving a model. The previous model is in {round_dir}. "
+                                f"See {log}")
+        vame.evaluate_model(config=config)
+        self._record_more_epochs(epochs)
+        return round_dir
+
+    def _archive_round(self) -> Path:
+        """Move what was made with the current model to history/round_<k>/; leave empty folders for the next round."""
+        k = 1
+        while (self.history_dir / f"round_{k}").exists():
+            k += 1
+        round_dir = self.history_dir / f"round_{k}"
+        (round_dir / "model").mkdir(parents=True)
+        # Copied, not moved: train_more starts from it, so it must stay in best_model/.
+        shutil.copy2(self.model_path, round_dir / "model" / self.model_path.name)
+        if self.model_settings_path.exists():
+            shutil.copy2(self.model_settings_path, round_dir / MODEL_SETTINGS_FILE)
+
+        model_dir = self.project_path / "model"
+        moves = {
+            model_dir / "best_model" / "snapshots": round_dir / "model" / "snapshots",
+            model_dir / "model_losses": round_dir / "model" / "model_losses",
+            model_dir / "evaluate": round_dir / "model" / "evaluate",
+            self.project_path / "results": round_dir / "results",
+        }
+        for src, dst in moves.items():
+            if src.exists():
+                shutil.move(src, dst)
+            src.mkdir()  # VAME writes into these folders but does not create them
+        for pose_path in self.cfg.pose_files:
+            (self.project_path / "results" / pose_path.stem).mkdir()  # as init_new_project leaves them
+        if self.cfg.motifs_dir.exists():
+            shutil.move(self.cfg.motifs_dir, round_dir / "motifs")
+        return round_dir
+
+    def _record_more_epochs(self, epochs: int) -> None:
+        """Add the round to model_settings.yaml; _check_model_settings ignores this key."""
+        import yaml
+
+        settings = model_settings(self.cfg)
+        if self.model_settings_path.exists():
+            with open(self.model_settings_path) as fh:
+                settings = yaml.safe_load(fh) or settings
+        settings["more_epochs"] = [*settings.get("more_epochs", []), epochs]
+        with open(self.model_settings_path, "w") as fh:
+            yaml.safe_dump(settings, fh, sort_keys=False)
 
     # --- step 6 ---------------------------------------------------------
     def segment(self, overwrite: bool = False) -> None:
@@ -563,7 +643,7 @@ class VamePipeline:
         run when input.videos was set.
         """
         self.init(check_settings=not force)
-        if force or not self.trainset_path.exists():    
+        if force or not self.trainset_path.exists():
             self.prepare()
         else:
             logger.info("prepare: already done, skipping (use --force to redo)")

@@ -67,6 +67,12 @@ def cmd_train(cfg: ExperimentConfig, args) -> None:
     VamePipeline(cfg).train()
 
 
+def cmd_train_more(cfg: ExperimentConfig, args) -> None:
+    round_dir = VamePipeline(cfg).train_more(args.epochs)
+    print(f"Trained {args.epochs} more epochs. The previous round is in {round_dir}")
+    print("Run 'segment' (or 'run') again: the motifs of the old model were moved there too.")
+
+
 def cmd_segment(cfg: ExperimentConfig, args) -> None:
     VamePipeline(cfg).segment(overwrite=args.force)
 
@@ -134,6 +140,7 @@ COMMANDS: dict[str, tuple[Callable, str, bool]] = {
     "init":     (cmd_init,     "Create the VAME project from the pose CSVs", True),
     "prepare":  (cmd_prepare,  "Clean, align and build the training set", True),
     "train":    (cmd_train,    "Train and evaluate the VAME model (slow; GPU)", True),
+    "train-more": (cmd_train_more, "Train the model --epochs more epochs (underfit); keeps the old one in history/", True),
     "segment":  (cmd_segment,  "Assign a motif to every time window", True),
     "export":   (cmd_export,   "Write motif CSVs + motif usage summary", False),
     "communities": (cmd_communities, "Group motifs with similar transitions into communities", True),
@@ -161,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-c", "--config", required=True, help="experiment YAML file")
     parser.add_argument("--force", action="store_true",
                         help="redo finished steps (run) / overwrite segmentation (segment) / redo the map (umap)")
+    parser.add_argument("--epochs", type=int, help="train-more: how many more epochs to train (required)")
     gif = parser.add_argument_group("gif options")
     gif.add_argument("--session", help="recording to show (default: the first)")
     gif.add_argument("--algorithm", choices=["hmm", "kmeans"], help="segmentation to colour by (default: the first)")
@@ -175,7 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "train-more" and args.epochs is None:
+        parser.error("train-more needs --epochs N: how many more epochs to train")  # exit code 2
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

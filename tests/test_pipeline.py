@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import yaml
 from conftest import write_video, write_yaml
 
 from vame_motifs.config import load_config
@@ -169,33 +170,37 @@ def test_symlinks_allowed_is_false_when_links_fail(monkeypatch):
     monkeypatch.setattr("pathlib.Path.symlink_to", refuse)
     assert symlinks_allowed() is False
 
+
 def _prepare_with(experiment, **yaml_overrides) -> None:
     """Stand-in for a finished 'prepare': the settings file it leaves, without running VAME."""
     write_yaml(experiment.parent, **yaml_overrides)
     pipeline = VamePipeline(load_config(experiment))
     pipeline.project_path.mkdir(parents=True)
-    pipeline._write_model_settings() 
+    pipeline._write_model_settings()
+
 
 def test_changed_model_settings_is_refused_before_vame_runs(experiment):
-    _prepare_with(experiment) # exclude: []
+    _prepare_with(experiment)  # exclude: []
     write_yaml(experiment.parent, exclude="[left_ear]")
     pipeline = VamePipeline(load_config(experiment))
 
     with pytest.raises(PipelineError, match=r"other settings \(exclude: \[\] -> \['left_ear'\]\).*run --force"):
         pipeline.init()
 
+
 def test_segmentation_settings_do_not_need_retraining(experiment):
     pipeline = VamePipeline(load_config(experiment))
-    pipeline._check_model_settings() # nothing prepared yet
+    pipeline._check_model_settings()  # nothing prepared yet
 
     _prepare_with(experiment, n_clusters=5)
-    write_yaml(experiment.parent, n_clusters=8, method= "kmeans")
+    write_yaml(experiment.parent, n_clusters=8, method="kmeans")
     VamePipeline(load_config(experiment))._check_model_settings()
+
 
 def test_run_force_skips_the_settings_check(experiment, monkeypatch):
     pipeline = VamePipeline(load_config(experiment))
     calls = []
-    monkeypatch.setattr(pipeline, "init", lambda check_settings = True: calls.append(check_settings))
+    monkeypatch.setattr(pipeline, "init", lambda check_settings=True: calls.append(check_settings))
     for step in ["prepare", "train", "segment"]:
         monkeypatch.setattr(pipeline, step, lambda *args, **kwargs: None)
 
@@ -203,3 +208,87 @@ def test_run_force_skips_the_settings_check(experiment, monkeypatch):
     pipeline.run(force=False)
     assert calls == [False, True]
 
+
+# --- train-more ---------------------------------------------------------
+def _trained_project(experiment) -> VamePipeline:
+    """A project as 'train' and 'segment' leave it, with placeholder files instead of VAME's."""
+    pipeline = VamePipeline(load_config(experiment))
+    model_dir = pipeline.project_path / "model"
+    for folder in ("best_model/snapshots", "model_losses", "evaluate"):
+        (model_dir / folder).mkdir(parents=True)
+    pipeline.model_path.write_bytes(b"old weights")
+    (model_dir / "model_losses" / "train_losses_VAME.npy").write_bytes(b"")
+    pipeline.label_file("rat01DLC_resnet50", "hmm").parent.mkdir(parents=True)
+    pipeline.label_file("rat01DLC_resnet50", "hmm").write_bytes(b"")
+    (pipeline.cfg.motifs_dir / "hmm").mkdir(parents=True)
+    pipeline._write_model_settings()
+    pipeline._config = {"project_path": str(pipeline.project_path)}  # as if init() had run
+    return pipeline
+
+
+class FakeVame:
+    """Records the config train_model gets and saves a 'model' as VAME would."""
+    def __init__(self, pipeline: VamePipeline, log_text: str = ""):
+        self.pipeline, self.log_text, self.train_config = pipeline, log_text, None
+
+    def train_model(self, config):
+        self.train_config = config
+        self.pipeline._log("train_model").parent.mkdir(exist_ok=True)
+        with open(self.pipeline._log("train_model"), "a") as fh:
+            fh.write(self.log_text)
+        self.pipeline.model_path.write_bytes(b"new weights")
+
+    def evaluate_model(self, config):
+        pass
+
+
+def test_train_more_starts_from_the_saved_weights(experiment, monkeypatch):
+    pipeline = _trained_project(experiment)
+    vame = FakeVame(pipeline)
+    monkeypatch.setattr("vame_motifs.pipeline._import_vame", lambda: vame)
+
+    pipeline.train_more(25)
+
+    assert vame.train_config["pretrained_weights"] is True
+    assert vame.train_config["pretrained_model"] == "VAME"
+    assert vame.train_config["max_epochs"] == 25
+    assert yaml.safe_load(pipeline.model_settings_path.read_text())["more_epochs"] == [25]
+
+
+def test_previous_round_is_kept_in_history(experiment, monkeypatch):
+    pipeline = _trained_project(experiment)
+    monkeypatch.setattr("vame_motifs.pipeline._import_vame", lambda: FakeVame(pipeline))
+
+    round_dir = pipeline.train_more(10)
+
+    assert round_dir == pipeline.project_path / "history" / "round_1"
+    assert (round_dir / "model" / pipeline.model_path.name).read_bytes() == b"old weights"
+    assert (round_dir / "model" / "model_losses" / "train_losses_VAME.npy").exists()
+    assert (round_dir / "results" / "rat01DLC_resnet50").is_dir()
+    assert (round_dir / "motifs" / "hmm").is_dir()
+    assert (round_dir / "model_settings.yaml").exists()
+    # what the new model has not made yet is gone; the folders VAME writes into are back, empty
+    assert not pipeline.label_file("rat01DLC_resnet50", "hmm").exists()
+    assert not pipeline.cfg.motifs_dir.exists()
+    assert sorted(p.name for p in (pipeline.project_path / "results").iterdir()) == [
+         "rat01DLC_resnet50", "rat02DLC_resnet50"]
+    assert not any((pipeline.project_path / "model" / "model_losses").iterdir())
+
+    assert pipeline.train_more(10) == pipeline.project_path / "history" / "round_2"
+
+
+def test_train_more_says_so_when_vame_could_not_load_the_weights(experiment, monkeypatch):
+    pipeline = _trained_project(experiment)
+    vame = FakeVame(pipeline, log_text="ERROR Could not load pretrained model. Check file path in config.yaml \n")
+    monkeypatch.setattr("vame_motifs.pipeline._import_vame", lambda: vame)
+
+    with pytest.raises(PipelineError, match=r"could not load the previous weights.*history.round_1"):
+        pipeline.train_more(10)
+
+
+def test_train_more_needs_a_model_and_some_epochs(experiment):
+    pipeline = VamePipeline(load_config(experiment))
+    with pytest.raises(PipelineError, match="Run 'train' first"):
+        pipeline.train_more(10)
+    with pytest.raises(PipelineError, match="at least 1"):
+        pipeline.train_more(0)

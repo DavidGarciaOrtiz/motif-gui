@@ -123,6 +123,7 @@ be run one by one:
 | `init`    | Creates the VAME project from the CSVs and writes your settings into VAME's config | seconds |
 | `prepare` | Low-confidence cleaning, egocentric alignment, outlier removal, smoothing, training set | seconds–minutes |
 | `train`   | Trains and evaluates the VAME model | the slow part: use a GPU |
+| `train-more` | Trains the existing model `--epochs N` more epochs, starting from its weights (an underfit model: loss still going down when training stopped). The previous model and everything made from it move to `history/` | like `train`, for N epochs |
 | `segment` | Assigns a motif to every time window (`--force` recomputes) | minutes (kmeans is much faster than hmm) |
 | `export`  | Writes the motif CSVs and the usage summary | seconds |
 | `communities` | Groups motifs into communities by cutting VAME's motif tree at `advanced.community_cut_tree` | seconds |
@@ -138,6 +139,14 @@ be run one by one:
   reused; only segmentation and export run.
 - New `time_window`, `zdims`, `max_epochs`, `min_confidence`, alignment or `exclude`:
   the model must be retrained, so use `vame-motifs run -c experiment.yaml --force`.
+  Without `--force`, every step stops with an error naming what changed, instead of
+  using a model made with the old settings. To keep the old model, set a new `output`
+  folder instead.
+- Model still improving when training stopped (underfit): train it further with
+  `vame-motifs train-more -c experiment.yaml --epochs 50`, then `run` again to segment
+  with the new model. The settings must not have changed since `prepare`. The previous
+  model, its loss curves and plots, and its motifs are kept in
+  `vame_project/history/round_<k>/`.
 
 Exit codes: `0` success, `1` a problem with the input or a missing step (printed as one
 `Error:` line, no traceback), `2` wrong command-line arguments. This makes the
@@ -305,6 +314,8 @@ outputs/
 ├── recording_names.csv              names given with 'Rename…' in the window
 ├── runs/<date>_<command>/           experiment.yaml copy, versions.txt, run.log
 └── vame_project/                    VAME's own project (model, logs, plots in model/evaluate/)
+    ├── model_settings.yaml          the settings 'prepare' used (+ more_epochs of each train-more)
+    ├── history/round_<k>/           after 'train-more': the previous model, losses, plots, results, motifs
     └── results/
         ├── umap_embedding.npz       the map of 'umap'
         ├── community_cohort/hmm-<n_clusters>/   tree.graphml, tree.png, cohort_community_bag.npy
@@ -346,6 +357,8 @@ that produced it.
 | `... has body parts [...], but ... has [...]` | All recordings must be tracked with the same DLC body parts. |
 | `<part>: 60% of frames below likelihood 0.9` | A warning: that body part will be mostly filled in. Improve tracking in DLC or add it to `keypoints.exclude`. |
 | `Training finished without saving a model` | VAME only saves a model after its warm-up epochs; raise `advanced.max_epochs`. |
+| `The training set in ... was made with other settings (zdims: 30 -> 10)` | Settings that shape the model changed since `prepare`. Use `run --force` to redo it with the new ones, or a new `output` folder to keep the old model. |
+| `VAME could not load the previous weights, so this was not a continuation` | `train-more` trained from scratch instead. The previous model is in the `history/round_<k>/` folder named in the message; see `logs/train_model.log`. |
 | `No hmm labels for '...'. Run 'segment' first.` | `export` was run before `segment`, or with a different `n_clusters`. |
 | `No raw videos configured (input.videos). ...` | `videos` was run without setting `input.videos` in the YAML. |
 | `input.videos: no video matches pose file '...'` | No video in `input.videos` has a name that is a prefix of that pose file's name (the DeepLabCut naming convention). |
