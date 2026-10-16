@@ -168,3 +168,38 @@ def test_symlinks_allowed_is_false_when_links_fail(monkeypatch):
 
     monkeypatch.setattr("pathlib.Path.symlink_to", refuse)
     assert symlinks_allowed() is False
+
+def _prepare_with(experiment, **yaml_overrides) -> None:
+    """Stand-in for a finished 'prepare': the settings file it leaves, without running VAME."""
+    write_yaml(experiment.parent, **yaml_overrides)
+    pipeline = VamePipeline(load_config(experiment))
+    pipeline.project_path.mkdir(parents=True)
+    pipeline._write_model_settings() 
+
+def test_changed_model_settings_is_refused_before_vame_runs(experiment):
+    _prepare_with(experiment) # exclude: []
+    write_yaml(experiment.parent, exclude="[left_ear]")
+    pipeline = VamePipeline(load_config(experiment))
+
+    with pytest.raises(PipelineError, match=r"other settings \(exclude: \[\] -> \['left_ear'\]\).*run --force"):
+        pipeline.init()
+
+def test_segmentation_settings_do_not_need_retraining(experiment):
+    pipeline = VamePipeline(load_config(experiment))
+    pipeline._check_model_settings() # nothing prepared yet
+
+    _prepare_with(experiment, n_clusters=5)
+    write_yaml(experiment.parent, n_clusters=8, method= "kmeans")
+    VamePipeline(load_config(experiment))._check_model_settings()
+
+def test_run_force_skips_the_settings_check(experiment, monkeypatch):
+    pipeline = VamePipeline(load_config(experiment))
+    calls = []
+    monkeypatch.setattr(pipeline, "init", lambda check_settings = True: calls.append(check_settings))
+    for step in ["prepare", "train", "segment"]:
+        monkeypatch.setattr(pipeline, step, lambda *args, **kwargs: None)
+
+    pipeline.run(force=True)
+    pipeline.run(force=False)
+    assert calls == [False, True]
+

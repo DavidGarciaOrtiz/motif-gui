@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 VAME_VERSION = "0.14.4"
 SOURCE_SOFTWARE = "DeepLabCut"
 MODEL_NAME = "VAME"  # VAME's default model_name; results are saved under it
+MODEL_SETTINGS_FILE = "model_settings.yaml" # in the project folder: the settings 'prepare' used
 
 
 class PipelineError(RuntimeError):
@@ -51,6 +52,26 @@ def vame_settings(cfg: ExperimentConfig) -> dict:
         "zdims": cfg.zdims,
         "project_random_state": cfg.seed,
         "all_data": "yes",  # segment every session, never ask interactively
+    }
+
+
+def model_settings(cfg: ExperimentConfig) -> dict:
+    """The YAML settings that shape the training set and the model.
+    
+    Changing any of them after 'prepare' leaves the existing model out of date. 
+    n_clusters and method are not here: they only affect segmentation, which is redone
+    for new values without retraining. fps is not here either as VAME's preprocessing
+    and training never read it.
+    """
+    return{
+        "min_confidence": cfg.min_confidence,
+        "align_center": cfg.align_center,
+        "align_direction": cfg.align_direction,
+        "exclude": sorted(cfg.exclude), # order of the list does not change data
+        "time_window": cfg.time_window,
+        "zdims": cfg.zdims,
+        "max_epochs": cfg.max_epochs,
+        "seed": cfg.seed,
     }
 
 
@@ -123,16 +144,20 @@ class VamePipeline:
         return self.project_path / "logs" / f"{name}.log"
 
     # --- step 0-1 -------------------------------------------------------
-    def init(self) -> dict:
+    def init(self, check_settings: bool = True) -> dict:
         """Create the VAME project (or open the existing one) and apply our settings.
 
         init_new_project returns an existing project untouched, ignoring
         config_kwargs, so the settings are written again with update_config.
         That makes YAML edits (e.g. a new n_clusters) take effect on re-runs.
         For the same reason, an existing project never gets new recordings:
-        _check_project_sessions stops early if the recordings changed.
+        _check_project_sessions stops early if the recordings changed. 
+        _check_settings=False skips _check_model_settings: for 'prepare' and 
+        'run --force', which make the training set again with the new settings.
         """
         self._check_project_sessions()
+        if check_settings:
+            self._check_model_settings()
         vame = _import_vame()
         from vame.util.auxiliary import read_config, update_config
 
@@ -181,11 +206,43 @@ class VamePipeline:
         )
 
     @property
+    def model_settings_path(self) -> Path:
+        return self.project_path / MODEL_SETTINGS_FILE
+    
+    def _check_model_settings(self) -> None:
+        """Raise if the training set (and so the model) was made with other settings than the YAML's
+        
+        Without this, 'run' would skip prepare and train (their files exist)
+        and label the old model's results with the new settings.
+        """
+        if not self.model_settings_path.exists():
+            return # nothing prepared yet (or a project made before this check existed)
+        import yaml
+
+        with open(self.model_settings_path) as fh:
+            used = yaml.safe_load(fh) or {}
+        now = model_settings(self.cfg)
+        changes = [f"{key}: {used.get(key)} -> {value}" for key, value in now.items() if used.get(key) != value]
+        if changes:
+            raise PipelineError(
+                f"The training set in {self.project_path} was made with other settings ({';'.join(changes)}). "
+                "To use the new ones, prepare and train again ('run --force', or 'prepare' then 'train'); "
+                "to keep the old results, set a new output folder."
+            )
+
+    def _write_model_settings(self) -> None:
+        import yaml
+        with open(self.model_settings_path, "w") as fh:
+            yaml.safe_dump(model_settings(self.cfg), fh, sort_keys=False) 
+
+    @property
     def config(self) -> dict:
         return self._config if self._config is not None else self.init()
 
     # --- step 2-3 -------------------------------------------------------
     def prepare(self) -> None:
+        if self._config is None:
+            self.init(check_settings=False) # prepare is how new settings get applied
         vame = _import_vame()
         processed_variable = vame.preprocessing(
             config=self.config,
@@ -199,6 +256,7 @@ class VamePipeline:
         )
         if not self.trainset_path.exists():
             raise PipelineError(f"VAME did not create the training set. See {self._log('create_trainset')}")
+        self._write_model_settings()
 
     # --- step 4-5: the slow part ----------------------------------------
     def train(self) -> None:
@@ -504,8 +562,8 @@ class VamePipeline:
         retraining. Motif videos (and the community grouping they need) only
         run when input.videos was set.
         """
-        self.init()
-        if force or not self.trainset_path.exists():
+        self.init(check_settings=not force)
+        if force or not self.trainset_path.exists():    
             self.prepare()
         else:
             logger.info("prepare: already done, skipping (use --force to redo)")
