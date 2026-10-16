@@ -19,7 +19,7 @@ outputs/
 .vscode/
 
 # Local assistant instructions
-CLAUDE.md
+/.claude
 
 # Personal experiment files and examples: kept locally, not published
 /experiment.yaml

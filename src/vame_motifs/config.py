@@ -19,6 +19,7 @@ import yaml
 MIN_EPOCHS = 10
 METHODS = {"hmm": ["hmm"], "kmeans": ["kmeans"], "both": ["hmm", "kmeans"]}
 VIDEO_SUFFIXES = (".mp4", ".avi")  # the formats VAME's own video step accepts
+FILTERED_SUFFIX = "_filtered"  # DeepLabCut's filter_predictions writes <name>_filtered.csv next to <name>.csv
 
 
 class ConfigError(ValueError):
@@ -78,6 +79,16 @@ def _find_pose_files(pose_path: Path) -> list[Path]:
     files = sorted(pose_path.glob("*.csv"))
     if not files:
         raise ConfigError(f"No .csv files found in {pose_path}")
+    # Raw and filtered output of the same recording side by side would be
+    # analysed as two recordings: the same data twice. Ask which one to use.
+    stems = {p.stem for p in files}
+    both = sorted(s for s in stems if s.endswith(FILTERED_SUFFIX) and s.removesuffix(FILTERED_SUFFIX) in stems)
+    if both:
+        names = ", ".join(f"{s.removesuffix(FILTERED_SUFFIX)}.csv / {s}.csv" for s in both)
+        raise ConfigError(
+            f"input.pose_files: {pose_path} has both the raw and the filtered DeepLabCut output "
+            f"of the same recording ({names}). Keep only one version of each recording in the folder."
+        )
     return files
 
 
@@ -93,8 +104,11 @@ def _find_videos(video_path: Path, pose_files: list[Path]) -> list[Path]:
       (``session1DLC_resnet50_..._filtered.csv`` ->
       ``session1DLC_resnet50_..._filtered_p60_labeled.mp4``).
 
-    Each pose file is matched to the video whose stem is closest to its
-    own (smallest length difference), in whichever direction applies.
+    The raw video is preferred: when a folder holds both, the labeled one
+    (with DeepLabCut's points drawn on it) is only used if there is no raw
+    video. Within each kind, the most specific match wins: the longest raw
+    name (``rat10.mp4`` over ``rat1.mp4`` for ``rat10DLC_...``), or the
+    shortest labeled name.
     """
     if not video_path.exists():
         raise ConfigError(f"input.videos: {video_path} does not exist")
@@ -109,19 +123,21 @@ def _find_videos(video_path: Path, pose_files: list[Path]) -> list[Path]:
 
     videos = []
     for pose_path in pose_files:
-        matches = [
-            v for v in candidates
-            if pose_path.stem.startswith(v.stem) or v.stem.startswith(pose_path.stem)
-        ]
-        if not matches:
+        raw = [v for v in candidates if pose_path.stem.startswith(v.stem)]
+        labeled = [v for v in candidates if v.stem.startswith(pose_path.stem)]
+        if not raw and not labeled:
             raise ConfigError(
                 f"input.videos: no video matches pose file '{pose_path.name}' "
                 f"(expected either the raw video DeepLabCut analysed, whose file name "
                 f"is a prefix of '{pose_path.stem}', or a labeled video whose file name "
                 f"starts with '{pose_path.stem}')"
             )
-        # most specific match wins: smallest stem-length difference, in either direction
-        videos.append(min(matches, key=lambda v: abs(len(v.stem) - len(pose_path.stem))))
+        # Raw first: motif clips should show the recording, not DLC's markers.
+        # max/min keep the first file on ties, as the sorted() above makes that deterministic.
+        if raw:
+            videos.append(max(raw, key=lambda v: len(v.stem)))
+        else:
+            videos.append(min(labeled, key=lambda v: len(v.stem)))
 
     reused = {v for v in videos if videos.count(v) > 1}
     if reused:

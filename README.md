@@ -68,12 +68,16 @@ vame-motifs --help
 - **Pose files:** single-animal DeepLabCut `.csv` files (three header rows:
   `scorer`, `bodyparts`, `coords`). Multi-animal files are not supported yet.
   All files must have the same body parts. The file name (without `.csv`) becomes
-  the recording's name in every output.
+  the recording's name in every output. Use either the raw or the `_filtered` output
+  of each recording, not both: a folder holding `rat01DLC_....csv` and
+  `rat01DLC_..._filtered.csv` is rejected, as it would analyse the same recording twice.
 
 - **Videos (optional):** the raw recordings DeepLabCut analysed, only needed for the
   `videos` step. Each video is matched to its pose file the way DeepLabCut names them:
   a video `rat01.mp4` is paired with the pose file `rat01DLC_resnet50_....csv` because
   the video's name is a prefix of the pose file's. `.mp4` and `.avi` are supported.
+  Pose files and videos can share one folder: other files are ignored, and when a
+  labeled video (`..._labeled.mp4`) sits next to the raw one, the raw one is used.
 
 - **Experiment file:** save the example below as `experiment.yaml` next to your
   data and edit it (or let the window write it for you). Paths in it are relative
